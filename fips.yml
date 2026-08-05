@@ -1,0 +1,8 @@
+#
+# fips-openpnp-capture
+#
+---
+exports:
+    header-dirs : [ 'include' ]
+    modules:
+        openpnp-capture:   .

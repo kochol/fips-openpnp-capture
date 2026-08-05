@@ -1,180 +1,133 @@
 #
-# CMAKE build file for OpenPnP Capture library
+# project: fips-openpnp-capture
 #
-# This generates make files for several build systems,
-# such as GNU Make, Ninja and visual studio
-#
-# When invoking on Windows systems, make sure the
-# compiler (Visual Studio) is in the search path.
-#
-# Author: Niels A. Moseley, Jason von Nieda
+# Upstream builds a shared library with its own version, MSVC runtime and turbojpeg machinery, this
+# replaces that with a single static fips lib built from the same per platform sources.
 #
 
-cmake_minimum_required(VERSION 3.10)
-project (openpnp-capture)
-set(OPENPNP_CAPTURE_LIB_VERSION "0.0.28" CACHE STRING "openpnp-capture library version")
-set(OPENPNP_CAPTURE_LIB_SOVERSION "0" CACHE STRING "openpnp-capture library soversion")
+if (NOT FIPS_IMPORT)
+    cmake_minimum_required(VERSION 3.21)
+    project(fips-openpnp-capture)
+    # include the fips main cmake file
+    get_filename_component(FIPS_ROOT_DIR "../fips" ABSOLUTE)
+    include("${FIPS_ROOT_DIR}/cmake/fips.cmake")
 
-# Library type options
-option(BUILD_SHARED_LIBS "Build shared library" ON)
-option(BUILD_STATIC_LIBS "Build static library" OFF)
-option(LINK_DYNAMIC_MSVC_RUNTIME "Link MSVC runtime statically" OFF)
-
-# Validate library type options
-if(BUILD_STATIC_LIBS AND BUILD_SHARED_LIBS)
-    message(WARNING "Both BUILD_STATIC_LIBS and BUILD_SHARED_LIBS are enabled. Building static library only.")
-    set(BUILD_SHARED_LIBS OFF)
-elseif(NOT BUILD_STATIC_LIBS AND NOT BUILD_SHARED_LIBS)
-    message(STATUS "Neither BUILD_STATIC_LIBS nor BUILD_SHARED_LIBS specified. Defaulting to shared library.")
-    set(BUILD_SHARED_LIBS ON)
+    fips_setup(PROJECT fips-openpnp-capture)
 endif()
 
-# make sure the libjpegturbo is compiled with the
-# position independent flag -fPIC
-IF (UNIX)
-    set(POSITION_INDEPENDENT_CODE TRUE)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+set(OPENPNP_CAPTURE_LIB_VERSION "0.0.28")
 
-    # Add O3 optimizations and native architecture for release builds
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -march=native")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native")
-ENDIF()
+# common/libmain.cpp includes version.h unconditionally and upstream generates it from a git tag into
+# the source tree, generate it into the build tree instead so the checkout stays clean
+set(GITVERSION "v${OPENPNP_CAPTURE_LIB_VERSION}")
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
 
-# make CMAKE search the current cmake dir inside the
-# current project
-set (CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include_directories(include)
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-# force C++11 standard
-set(CMAKE_CXX_STANDARD 11)
-
-# load module that gets info from GIT 
-# see: http://brianmilco.blogspot.nl/2012/11/cmake-automatically-use-git-tags-as.html
-include(GetGitRevisionDescription)
-
-# create library version from GIT tag using cmake/version.h.in as a template
-# and write it to common/version.h
-git_describe(GITVERSION --tags)
-MESSAGE(STATUS "Using GIT tag: " ${GITVERSION} )
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.h.in ${CMAKE_CURRENT_SOURCE_DIR}/common/version.h)
-
-# determine number of bits of compiler
-if( CMAKE_SIZEOF_VOID_P EQUAL 8 )
-  set( COMPILERBITS "64 bit")
-else( CMAKE_SIZEOF_VOID_P EQUAL 8 )
-  set( COMPILERBITS "32 bit")
-endif( CMAKE_SIZEOF_VOID_P EQUAL 8 )
-
-# check the build type and set the build type string
-if(CMAKE_BUILD_TYPE MATCHES Release)
-    add_definitions(-D__BUILDTYPE__="release")
-else(CMAKE_BUILD_TYPE MATCHES Release)
-    add_definitions(-D__BUILDTYPE__="debug")
-endif(CMAKE_BUILD_TYPE MATCHES Release)
-
-# create our capture library
-if(BUILD_STATIC_LIBS AND NOT BUILD_SHARED_LIBS)
-    set(LIBRARY_TYPE STATIC)
-    add_definitions(-DOPENPNPCAPTURE_STATIC)
-    message(STATUS "Building static library")
+if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(COMPILERBITS "64 bit")
 else()
-    set(LIBRARY_TYPE SHARED)
-    message(STATUS "Building shared library")
+    set(COMPILERBITS "32 bit")
 endif()
 
-add_library(openpnp-capture ${LIBRARY_TYPE} common/libmain.cpp
-                                           common/context.cpp
-                                           common/logging.cpp
-                                           common/stream.cpp)
+if (CMAKE_BUILD_TYPE MATCHES Release)
+    set(BUILDTYPE_STRING "release")
+else()
+    set(BUILDTYPE_STRING "debug")
+endif()
 
-target_include_directories(openpnp-capture PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-)
-# define common properties
-set_target_properties(openpnp-capture PROPERTIES
-                      VERSION ${OPENPNP_CAPTURE_LIB_VERSION}
-                      SOVERSION ${OPENPNP_CAPTURE_LIB_SOVERSION})
+fips_begin_lib(openpnp-capture)
 
-IF (WIN32)
-    if(MSVC)
-        if(LINK_DYNAMIC_MSVC_RUNTIME)
-            set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MD")
-            set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MDd")
-        else()
-            set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
-            set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd")
-        endif()
+    fips_dir(common)
+    fips_files(
+        context.cpp
+        context.h
+        deviceinfo.h
+        libmain.cpp
+        logging.cpp
+        logging.h
+        stream.cpp
+        stream.h
+    )
+
+    if (FIPS_WINDOWS)
+        # DirectShow backend, the sample grabber filter is hand rolled in samplegrabber.h because the
+        # one shipped with Windows was removed. Blackmagic cards show up here as "Blackmagic WDM Capture"
+        fips_dir(win)
+        fips_files(
+            platformcontext.cpp
+            platformcontext.h
+            platformdeviceinfo.h
+            platformstream.cpp
+            platformstream.h
+            samplegrabber.h
+            scopedcomptr.h
+        )
+        fips_libs(strmiids ole32 oleaut32)
+        set(PLATFORM_STRING "Win ${COMPILERBITS}")
+    elseif (FIPS_OSX)
+        # AVFoundation backend, uvcctrl drives the manual exposure/focus controls over raw USB
+        fips_dir(mac)
+        fips_files(
+            platformcontext.h
+            platformcontext.mm
+            platformdeviceinfo.h
+            platformstream.h
+            platformstream.mm
+            uvcctrl.h
+            uvcctrl.mm
+        )
+        fips_frameworks_osx(AVFoundation Foundation CoreMedia CoreVideo Accelerate IOKit)
+        set(PLATFORM_STRING "OSX ${COMPILERBITS}")
+    else()
+        # V4L2 backend, MJPEG frames are decoded with libjpeg-turbo
+        fips_dir(linux)
+        fips_files(
+            mjpeghelper.cpp
+            mjpeghelper.h
+            platformcontext.cpp
+            platformcontext.h
+            platformdeviceinfo.h
+            platformstream.cpp
+            platformstream.h
+            scopedptr.h
+            yuvconverters.cpp
+            yuvconverters.h
+        )
+        fips_libs(pthread)
+        set(PLATFORM_STRING "Linux ${COMPILERBITS}")
+        set(OPENPNP_LINUX_BACKEND TRUE)
     endif()
 
-    # set the platform identification string
-    add_definitions(-D__PLATFORM__="Win ${COMPILERBITS}")
-    
-    # remove annoying 'unsafe' function warnings
-    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+fips_end_lib()
 
-    # add files for WIN32
-    target_sources(openpnp-capture PRIVATE win/platformcontext.cpp
-                                           win/platformstream.cpp)
-    target_link_libraries(openpnp-capture strmiids)
+# static lib, so the api must not be marked dllimport in the consumers either
+# libmain.cpp defines BUILD_OPENPNP_LIBRARY itself, defining it here too only warns
+target_compile_definitions(openpnp-capture PUBLIC OPENPNPCAPTURE_STATIC)
 
-    # add windows-specific test application
-    add_subdirectory(win/tests)
+# reported back by Cap_getLibraryVersion
+target_compile_definitions(openpnp-capture PRIVATE "__PLATFORM__=\"${PLATFORM_STRING}\"")
+target_compile_definitions(openpnp-capture PRIVATE "__BUILDTYPE__=\"${BUILDTYPE_STRING}\"")
 
-ELSEIF(APPLE)
-    # set the platform identification string
-    add_definitions(-D__PLATFORM__="OSX ${COMPILERBITS}")
+if (FIPS_WINDOWS)
+    target_compile_definitions(openpnp-capture PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 
-    target_sources(openpnp-capture PRIVATE mac/platformcontext.mm
-                                           mac/platformstream.mm
-                                           mac/uvcctrl.mm)
+if (OPENPNP_LINUX_BACKEND)
+    # prefer a system libjpeg-turbo, fall back to building the vendored copy
+    find_package(PkgConfig)
+    if (PkgConfig_FOUND)
+        pkg_search_module(TurboJPEG libturbojpeg)
+    endif()
 
-    # include OS X specific frameworks
-    target_link_libraries(openpnp-capture
-        "-framework AVFoundation"
-        "-framework Foundation"
-        "-framework CoreMedia"
-        "-framework CoreVideo"
-        "-framework Accelerate"
-        "-framework IOKit"
-        )
-
-    # add mac specific test application
-    add_subdirectory(mac/tests)
-
-ELSEIF(UNIX)
-    # install path resolving
-    include(GNUInstallDirs)
-
-    # set the platform identification string
-    add_definitions(-D__PLATFORM__="Linux ${COMPILERBITS}")
-
-    target_sources(openpnp-capture PRIVATE linux/platformcontext.cpp
-                                           linux/platformstream.cpp
-                                           linux/mjpeghelper.cpp
-                                           linux/yuvconverters.cpp)
-
-    # force include directories for libjpeg-turbo
-    include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/linux/contrib/libjpeg-turbo-3.1.2")
-
-    # add pthreads library 
-    set(THREADS_PREFER_PTHREAD_FLAG ON)
-    find_package(Threads REQUIRED)    
-    target_link_libraries(openpnp-capture PRIVATE Threads::Threads)
-
-    # add turbojpeg library
-    find_package(PkgConfig REQUIRED)
-    pkg_search_module(TurboJPEG libturbojpeg)
-    if( TurboJPEG_FOUND )
-        target_link_directories(openpnp-capture PRIVATE ${TurboJPEG_LIBDIR})
+    if (TurboJPEG_FOUND)
         target_include_directories(openpnp-capture PRIVATE ${TurboJPEG_INCLUDE_DIRS})
+        target_link_directories(openpnp-capture PRIVATE ${TurboJPEG_LIBDIR})
         target_link_libraries(openpnp-capture PRIVATE ${TurboJPEG_LIBRARIES})
     else()
-        # compile libjpeg-turbo for MJPEG decoding support using ExternalProject
         include(ExternalProject)
-
-        set(LIBJPEG_TURBO_PREFIX ${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo)
-        set(LIBJPEG_TURBO_INSTALL_DIR ${LIBJPEG_TURBO_PREFIX}/install)
+        set(LIBJPEG_TURBO_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo/install)
 
         ExternalProject_Add(libjpeg-turbo-external
             SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/linux/contrib/libjpeg-turbo-3.1.2
@@ -187,43 +140,21 @@ ELSEIF(UNIX)
                 -DWITH_JAVA=OFF
                 -DCMAKE_C_FLAGS=-fPIC
                 -DCMAKE_CXX_FLAGS=-fPIC
-                -DCMAKE_C_FLAGS_RELEASE=-O3 
-                -DCMAKE_CXX_FLAGS_RELEASE=-O3
-            BUILD_BYPRODUCTS 
+            BUILD_BYPRODUCTS
                 ${LIBJPEG_TURBO_INSTALL_DIR}/lib/libturbojpeg.a
         )
 
-        # Create imported target for turbojpeg
         add_library(turbojpeg-static STATIC IMPORTED)
         set_target_properties(turbojpeg-static PROPERTIES
             IMPORTED_LOCATION ${LIBJPEG_TURBO_INSTALL_DIR}/lib/libturbojpeg.a
         )
 
-        # Set up include directories
         target_include_directories(openpnp-capture PRIVATE ${LIBJPEG_TURBO_INSTALL_DIR}/include)
-
-        # Make openpnp-capture depend on the external project
-        add_dependencies(openpnp-capture libjpeg-turbo-external)
         add_dependencies(turbojpeg-static libjpeg-turbo-external)
-
+        add_dependencies(openpnp-capture libjpeg-turbo-external)
         target_link_libraries(openpnp-capture PRIVATE turbojpeg-static)
     endif()
 
-    # add linux-specific test application
-    add_subdirectory(linux/tests)
-
-    # install lib and headers
-    install(FILES include/openpnp-capture.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-            COMPONENT headers)
-    install(TARGETS openpnp-capture EXPORT openpnp-capture
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT libraries)
-
-    # add cmake install target
-    install(EXPORT openpnp-capture
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/openpnp-capture
-            COMPONENT libraries)
-
-ENDIF()
-
+    # the static turbojpeg is built -fPIC, keep this lib matching it
+    set_target_properties(openpnp-capture PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
