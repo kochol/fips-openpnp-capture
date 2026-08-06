@@ -434,11 +434,9 @@ bool PlatformStream::open(Context *owner, deviceInfo *device, uint32_t width, ui
         }
     */
 
-    // only create a valid NULL renderer in release builds!
-    // FIXME: is this the behavior we actually want,
-    //        or should we use a special define to 
-    //        enable the preview window?
-    #ifndef _DEBUG
+    // Always end the graph in a NULL renderer. Upstream skipped this on _DEBUG builds, which left
+    // m_nullRenderer NULL so RenderStream let DirectShow add its own video renderer and pop up an
+    // "ActiveMovie Window". moco draws the frames itself, so that window is never wanted.
     hr = CoCreateInstance(CLSID_NullRenderer, NULL, CLSCTX_INPROC_SERVER, IID_IBaseFilter, (void**)(&m_nullRenderer));
     if (FAILED(hr))
     {
@@ -454,7 +452,6 @@ bool PlatformStream::open(Context *owner, deviceInfo *device, uint32_t width, ui
             return false;
         }
     }
-    #endif
 
     hr = m_capture->RenderStream(&PIN_CATEGORY_PREVIEW, &MEDIATYPE_Video, m_sourceFilter, m_sampleGrabberFilter, m_nullRenderer);
     if (hr < 0)
