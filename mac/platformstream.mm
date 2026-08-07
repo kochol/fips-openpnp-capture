@@ -160,12 +160,8 @@ bool PlatformStream::open(Context *owner, deviceInfo *device, uint32_t width, ui
         return false;
     }
 
-    platformDeviceInfo *dinfo = dynamic_cast<platformDeviceInfo*>(device);
-    if (dinfo == NULL)
-    {
-        LOG(LOG_CRIT, "Could not cast deviceInfo* to platfromDeviceInfo*!\n");
-        return false;
-    }
+    // static_cast: built with -fno-rtti; all deviceInfo here are platformDeviceInfo
+    platformDeviceInfo *dinfo = static_cast<platformDeviceInfo*>(device);
 
     if (dinfo->m_captureDevice == nullptr)
     {
